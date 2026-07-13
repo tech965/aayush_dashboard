@@ -6,7 +6,7 @@ export default function Home() {
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
         <header className="flex flex-col gap-4 rounded-3xl border border-black/10 bg-white/70 p-8 shadow-[0_24px_60px_var(--shadow)] backdrop-blur">
           <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--accent-dark)]">
-            Order Dashboard Developed by Abhijit
+            Order Dashboard Of Aayush wellness
           </p>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>

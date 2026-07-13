@@ -54,9 +54,7 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState(() => formatDateInput(new Date()));
   const [rows, setRows] = useState<StatsRow[]>([]);
   const [productRows, setProductRows] = useState<ProductRow[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "products">(
-    "overview"
-  );
+  const [activeTab, setActiveTab] = useState<"overview" | "products" | "unfulfilled">("overview");
   const [loading, setLoading] = useState(false);
   const [productLoading, setProductLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +152,29 @@ export default function Dashboard() {
     );
   }, [rows]);
 
+  // Unfulfilled orders split into two buckets:
+  // - Confirmed by Team: unfulfilled orders where the customer WAS reached/confirmed
+  // - Not Answering: unfulfilled orders where the customer could not be reached
+  const unfulfilledInsights = useMemo(() => {
+    const confirmedByTeam = Math.max(
+      0,
+      totals.unfulfilled - totals.notAnswering
+    );
+    return {
+      unfulfilled: totals.unfulfilled,
+      confirmedByTeam,
+      notAnswering: totals.notAnswering,
+      confirmedRate: pct(confirmedByTeam, totals.unfulfilled),
+      notAnsweringRate: pct(totals.notAnswering, totals.unfulfilled),
+    };
+  }, [totals.unfulfilled, totals.notAnswering]);
+
+  const maxUnfulfilledBucket = Math.max(
+    1,
+    unfulfilledInsights.confirmedByTeam,
+    unfulfilledInsights.notAnswering
+  );
+
   const productTotals = useMemo(() => {
     return productRows.reduce(
       (acc, row) => {
@@ -250,8 +271,19 @@ export default function Dashboard() {
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab("unfulfilled")}
+          className={`rounded-full px-4 py-2 text-sm font-semibold ${
+            activeTab === "unfulfilled"
+              ? "bg-[var(--accent)] text-white"
+              : "border border-black/10 bg-white text-[var(--muted)]"
+          }`}
+        >
+          Unfulfilled Insights
+        </button>
+        <button
+          type="button"
           onClick={() =>
-            downloadCsv(activeTab === "overview" ? "stats" : "products")
+            downloadCsv(activeTab === "products" ? "products" : "stats")
           }
           className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[var(--muted)]"
         >
@@ -298,12 +330,6 @@ export default function Dashboard() {
               value={totals.prepaid}
               tone="emerald"
               percent={pct(totals.prepaid, totals.total)}
-            />
-            <StatCard
-              label="Not Answering"
-              value={totals.notAnswering}
-              tone="purple"
-              percent={pct(totals.notAnswering, totals.total)}
             />
             <StatCard
               label="Expected RTO %"
@@ -414,7 +440,6 @@ export default function Dashboard() {
                     <th className="px-6 py-3">Cancelled</th>
                     <th className="px-6 py-3">COD</th>
                     <th className="px-6 py-3">Prepaid</th>
-                    <th className="px-6 py-3">Not Answering</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -461,19 +486,13 @@ export default function Dashboard() {
                             ({pct(Number(row.prepaid_orders), dayTotal).toFixed(1)}%)
                           </span>
                         </td>
-                        <td className="px-6 py-4">
-                          {Number(row.not_answering_orders)}{" "}
-                          <span className="text-xs text-[var(--muted)]">
-                            ({pct(Number(row.not_answering_orders), dayTotal).toFixed(1)}%)
-                          </span>
-                        </td>
                       </tr>
                     );
                   })}
                   {rows.length === 0 && !loading && (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={7}
                         className="px-6 py-8 text-center text-[var(--muted)]"
                       >
                         No data yet. Run backfill to load January 1, 2026 onward.
@@ -569,6 +588,189 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {activeTab === "unfulfilled" && (
+        <div className="flex flex-col gap-6">
+          <div className="grid gap-4 md:grid-cols-3">
+            <StatCard
+              label="Unfulfilled Orders"
+              value={unfulfilledInsights.unfulfilled}
+              tone="amber"
+              percent={pct(unfulfilledInsights.unfulfilled, totals.total)}
+            />
+            <StatCard
+              label="Confirmed by Team"
+              value={unfulfilledInsights.confirmedByTeam}
+              tone="emerald"
+              percent={unfulfilledInsights.confirmedRate}
+            />
+            <StatCard
+              label="Not Answering"
+              value={unfulfilledInsights.notAnswering}
+              tone="rose"
+              percent={unfulfilledInsights.notAnsweringRate}
+            />
+          </div>
+
+          <div className="flex flex-col gap-6 rounded-3xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_var(--shadow)]">
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--muted)]">
+                Team Response Breakdown
+              </p>
+              <h2 className="text-2xl font-semibold text-[var(--ink)]">
+                Confirmed by Team vs Not Answering
+              </h2>
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-[var(--ink)]">
+                    Confirmed by Team
+                  </span>
+                  <span className="text-[var(--muted)]">
+                    {new Intl.NumberFormat("en-IN").format(
+                      unfulfilledInsights.confirmedByTeam
+                    )}{" "}
+                    ({unfulfilledInsights.confirmedRate.toFixed(1)}%)
+                  </span>
+                </div>
+                <div className="h-3 w-full rounded-full bg-black/5">
+                  <div
+                    className="h-3 rounded-full bg-emerald-400/80"
+                    style={{
+                      width: `${Math.max(
+                        2,
+                        Math.round(
+                          (unfulfilledInsights.confirmedByTeam /
+                            maxUnfulfilledBucket) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-[var(--ink)]">
+                    Not Answering
+                  </span>
+                  <span className="text-[var(--muted)]">
+                    {new Intl.NumberFormat("en-IN").format(
+                      unfulfilledInsights.notAnswering
+                    )}{" "}
+                    ({unfulfilledInsights.notAnsweringRate.toFixed(1)}%)
+                  </span>
+                </div>
+                <div className="h-3 w-full rounded-full bg-black/5">
+                  <div
+                    className="h-3 rounded-full bg-rose-400/80"
+                    style={{
+                      width: `${Math.max(
+                        2,
+                        Math.round(
+                          (unfulfilledInsights.notAnswering /
+                            maxUnfulfilledBucket) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-[var(--muted)]">
+              Of all unfulfilled orders, your team has successfully reached
+              and confirmed{" "}
+              <span className="font-semibold text-[var(--ink)]">
+                {unfulfilledInsights.confirmedRate.toFixed(1)}%
+              </span>
+              , while{" "}
+              <span className="font-semibold text-[var(--ink)]">
+                {unfulfilledInsights.notAnsweringRate.toFixed(1)}%
+              </span>{" "}
+              remain unreachable.
+            </p>
+          </div>
+
+          <div className="overflow-hidden rounded-3xl border border-black/10 bg-white/90 shadow-[0_18px_40px_var(--shadow)]">
+            <div className="flex items-center justify-between border-b border-black/10 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--muted)]">
+                  Daily Unfulfilled Breakdown
+                </p>
+                <h3 className="text-xl font-semibold text-[var(--ink)]">
+                  {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}
+                </h3>
+              </div>
+              <div className="text-xs font-semibold text-[var(--muted)]">
+                Updated {formatDateInput(new Date())}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead className="bg-[var(--surface-strong)] text-left text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  <tr>
+                    <th className="px-6 py-3">Date</th>
+                    <th className="px-6 py-3">Unfulfilled</th>
+                    <th className="px-6 py-3">Confirmed by Team</th>
+                    <th className="px-6 py-3">Not Answering</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => {
+                    const dayUnfulfilled = Number(row.unfulfilled_orders) || 0;
+                    const dayNotAnswering =
+                      Number(row.not_answering_orders) || 0;
+                    const dayConfirmed = Math.max(
+                      0,
+                      dayUnfulfilled - dayNotAnswering
+                    );
+                    return (
+                      <tr
+                        key={row.day}
+                        className="border-b border-black/5 last:border-0"
+                      >
+                        <td className="px-6 py-4 font-semibold">
+                          {formatDisplayDate(row.day)}
+                        </td>
+                        <td className="px-6 py-4 font-semibold text-[var(--accent-dark)]">
+                          {dayUnfulfilled}
+                        </td>
+                        <td className="px-6 py-4">
+                          {dayConfirmed}{" "}
+                          <span className="text-xs text-[var(--muted)]">
+                            ({pct(dayConfirmed, dayUnfulfilled).toFixed(1)}%)
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          {dayNotAnswering}{" "}
+                          <span className="text-xs text-[var(--muted)]">
+                            ({pct(dayNotAnswering, dayUnfulfilled).toFixed(1)}%)
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {rows.length === 0 && !loading && (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="px-6 py-8 text-center text-[var(--muted)]"
+                      >
+                        No data yet. Run backfill to load January 1, 2026 onward.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -633,4 +835,4 @@ function StatCard({ label, value, tone, percent, onClick, hint }: StatCardProps)
       )}
     </Wrapper>
   );
-} 
+}
