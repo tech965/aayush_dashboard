@@ -22,6 +22,8 @@ type ProductRow = {
 
 const TIMEZONE = "Asia/Kolkata";
 const DEFAULT_START = "2026-01-01";
+const RTO_EDIT_PASSWORD = "Great12";
+const RTO_STORAGE_KEY = "rto-estimator-values";
 
 function formatDateInput(date: Date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -59,10 +61,59 @@ export default function Dashboard() {
   const [productLoading, setProductLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // RTO estimator inputs (user-entered assumptions, in %)
+  // RTO estimator inputs (user-entered assumptions, in %), persisted locally
   const [codRtoPercent, setCodRtoPercent] = useState<string>("");
   const [prepaidRtoPercent, setPrepaidRtoPercent] = useState<string>("");
   const [showRtoInputs, setShowRtoInputs] = useState(false);
+  const [isRtoUnlocked, setIsRtoUnlocked] = useState(false);
+  const [rtoPasswordInput, setRtoPasswordInput] = useState("");
+  const [rtoPasswordError, setRtoPasswordError] = useState(false);
+
+  // Load saved RTO values from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(RTO_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.codRtoPercent === "string") {
+          setCodRtoPercent(parsed.codRtoPercent);
+        }
+        if (typeof parsed.prepaidRtoPercent === "string") {
+          setPrepaidRtoPercent(parsed.prepaidRtoPercent);
+        }
+      }
+    } catch {
+      // ignore malformed/missing localStorage data
+    }
+  }, []);
+
+  // Persist RTO values to localStorage whenever they change
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        RTO_STORAGE_KEY,
+        JSON.stringify({ codRtoPercent, prepaidRtoPercent })
+      );
+    } catch {
+      // ignore storage errors (e.g. private browsing mode)
+    }
+  }, [codRtoPercent, prepaidRtoPercent]);
+
+  const handleRtoUnlock = () => {
+    if (rtoPasswordInput === RTO_EDIT_PASSWORD) {
+      setIsRtoUnlocked(true);
+      setRtoPasswordError(false);
+      setRtoPasswordInput("");
+    } else {
+      setRtoPasswordError(true);
+    }
+  };
+
+  const handleRtoLock = () => {
+    setIsRtoUnlocked(false);
+    setRtoPasswordInput("");
+    setRtoPasswordError(false);
+  };
 
   useEffect(() => {
     let active = true;
@@ -341,48 +392,111 @@ export default function Dashboard() {
                   : undefined
               }
               onClick={() => setShowRtoInputs((prev) => !prev)}
-              hint={showRtoInputs ? "Click to hide" : "Click to set assumptions"}
+              hint={showRtoInputs ? "Click to hide" : "Click to view assumptions"}
             />
           </div>
 
           {showRtoInputs && (
-            <div className="flex flex-col gap-4 rounded-3xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_var(--shadow)] md:flex-row md:items-end md:justify-between">
-              <div>
+            <div className="flex flex-col gap-4 rounded-3xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_var(--shadow)]">
+              <div className="flex flex-col gap-1">
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--muted)]">
                   RTO Estimator
                 </p>
-                <p className="mt-1 text-sm text-[var(--muted)]">
+                <p className="text-sm text-[var(--muted)]">
                   (COD × COD RTO% + Prepaid × Prepaid RTO%) ÷ Fulfilled Orders
                 </p>
               </div>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
-                  COD RTO %
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    value={codRtoPercent}
-                    onChange={(event) => setCodRtoPercent(event.target.value)}
-                    placeholder="e.g. 18"
-                    className="mt-2 w-32 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-[var(--ink)] shadow-sm"
-                  />
+
+              {!isRtoUnlocked ? (
+                <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                  <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                    Enter password to edit
+                    <input
+                      type="password"
+                      value={rtoPasswordInput}
+                      onChange={(event) => {
+                        setRtoPasswordInput(event.target.value);
+                        setRtoPasswordError(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") handleRtoUnlock();
+                      }}
+                      placeholder="Password"
+                      className="mt-2 w-48 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-[var(--ink)] shadow-sm"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRtoUnlock}
+                    className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Unlock
+                  </button>
+                  {rtoPasswordError && (
+                    <span className="text-xs font-semibold text-rose-600">
+                      Incorrect password
+                    </span>
+                  )}
+                  <div className="flex flex-wrap gap-4 md:ml-auto">
+                    <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                      COD RTO %
+                      <input
+                        type="text"
+                        value={codRtoPercent || "—"}
+                        disabled
+                        className="mt-2 w-32 rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-sm font-medium text-[var(--muted)]"
+                      />
+                    </div>
+                    <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                      Prepaid RTO %
+                      <input
+                        type="text"
+                        value={prepaidRtoPercent || "—"}
+                        disabled
+                        className="mt-2 w-32 rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-sm font-medium text-[var(--muted)]"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
-                  Prepaid RTO %
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    value={prepaidRtoPercent}
-                    onChange={(event) => setPrepaidRtoPercent(event.target.value)}
-                    placeholder="e.g. 3"
-                    className="mt-2 w-32 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-[var(--ink)] shadow-sm"
-                  />
+              ) : (
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                  <div className="flex flex-wrap gap-4">
+                    <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                      COD RTO %
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={codRtoPercent}
+                        onChange={(event) => setCodRtoPercent(event.target.value)}
+                        placeholder="e.g. 18"
+                        className="mt-2 w-32 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-[var(--ink)] shadow-sm"
+                      />
+                    </div>
+                    <div className="flex flex-col text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                      Prepaid RTO %
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={prepaidRtoPercent}
+                        onChange={(event) => setPrepaidRtoPercent(event.target.value)}
+                        placeholder="e.g. 3"
+                        className="mt-2 w-32 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-[var(--ink)] shadow-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRtoLock}
+                    className="rounded-xl border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[var(--muted)]"
+                  >
+                    Lock
+                  </button>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -836,3 +950,4 @@ function StatCard({ label, value, tone, percent, onClick, hint }: StatCardProps)
     </Wrapper>
   );
 }
+
