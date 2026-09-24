@@ -195,6 +195,29 @@ async function upsertOrders(client, orders) {
   }
 }
 
+// Client-credentials token (has read_orders); falls back to the static token.
+async function getToken(env) {
+  if (env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET) {
+    const response = await fetch(`https://${env.SHOPIFY_SHOP}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: env.SHOPIFY_CLIENT_ID,
+        client_secret: env.SHOPIFY_CLIENT_SECRET,
+        grant_type: "client_credentials",
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Token exchange failed ${response.status}: ${await response.text()}`);
+    }
+    return (await response.json()).access_token;
+  }
+  if (!env.SHOPIFY_ACCESS_TOKEN) {
+    throw new Error("Missing SHOPIFY_CLIENT_ID/SECRET or SHOPIFY_ACCESS_TOKEN in .env.local");
+  }
+  return env.SHOPIFY_ACCESS_TOKEN;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const startArgIndex = args.indexOf("--start");
@@ -207,13 +230,14 @@ async function main() {
   const env = parseEnv(fs.readFileSync(envPath, "utf8"));
 
   const shop = env.SHOPIFY_SHOP;
-  const token = env.SHOPIFY_ACCESS_TOKEN;
   const apiVersion = env.SHOPIFY_API_VERSION || "2024-10";
   const connectionString = env.DATABASE_URL;
 
-  if (!shop || !token || !connectionString) {
-    throw new Error("Missing SHOPIFY_SHOP, SHOPIFY_ACCESS_TOKEN, or DATABASE_URL in .env.local");
+  if (!shop || !connectionString) {
+    throw new Error("Missing SHOPIFY_SHOP or DATABASE_URL in .env.local");
   }
+
+  const token = await getToken(env);
 
   const pool = new Pool({
     connectionString,

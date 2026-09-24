@@ -20,6 +20,35 @@ type ProductRow = {
   orders_count?: number;
 };
 
+type CustomerMetrics = {
+  totalCustomers: number;
+  totalRevenue: number;
+  avgLtv: number;
+  repeatCustomers: number;
+  repeatRatePercent: number;
+  fulfilledOrders: number;
+  ltvRate: number;
+};
+
+type RepeatCustomerRow = {
+  customer_key: string;
+  phone: string | null;
+  order_count: number;
+  total_spent: number;
+  avg_order_value: number;
+  first_order_date: string;
+  last_order_date: string;
+  days_as_customer: number;
+};
+
+type RepeatCustomerSummary = {
+  repeatCustomerCount: number;
+  repeatRevenue: number;
+  avgOrdersPerRepeatCustomer: number;
+  avgSpendPerRepeatCustomer: number;
+  avgDaysAsCustomer: number;
+};
+
 const TIMEZONE = "Asia/Kolkata";
 const DEFAULT_START = "2026-01-01";
 const RTO_EDIT_PASSWORD = "Great12";
@@ -47,6 +76,14 @@ function pct(part: number, whole: number) {
   return whole > 0 ? (part / whole) * 100 : 0;
 }
 
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 export default function Dashboard() {
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
@@ -56,9 +93,11 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState(() => formatDateInput(new Date()));
   const [rows, setRows] = useState<StatsRow[]>([]);
   const [productRows, setProductRows] = useState<ProductRow[]>([]);
+  const [customerMetrics, setCustomerMetrics] = useState<CustomerMetrics | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "products" | "unfulfilled">("overview");
   const [loading, setLoading] = useState(false);
   const [productLoading, setProductLoading] = useState(false);
+  const [customerLoading, setCustomerLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // RTO estimator inputs (user-entered assumptions, in %), persisted locally
@@ -68,6 +107,13 @@ export default function Dashboard() {
   const [isRtoUnlocked, setIsRtoUnlocked] = useState(false);
   const [rtoPasswordInput, setRtoPasswordInput] = useState("");
   const [rtoPasswordError, setRtoPasswordError] = useState(false);
+
+  // LTV / repeat-customer detail panel — opens when the Customer LTV or
+  // Repeat Customers card is clicked. Fetches on demand, not on page load.
+  const [showLtvDetail, setShowLtvDetail] = useState(false);
+  const [repeatCustomersList, setRepeatCustomersList] = useState<RepeatCustomerRow[]>([]);
+  const [repeatCustomersSummary, setRepeatCustomersSummary] = useState<RepeatCustomerSummary | null>(null);
+  const [repeatCustomersLoading, setRepeatCustomersLoading] = useState(false);
 
   // Load saved RTO values from localStorage on mount
   useEffect(() => {
@@ -179,6 +225,69 @@ export default function Dashboard() {
     };
   }, [activeTab, startDate, endDate]);
 
+  // Lifetime value + repeat rate + LTV rate: fulfilled orders only, scoped
+  // to the Start/End Date pickers above. Re-fetches whenever they change.
+  useEffect(() => {
+    let active = true;
+    const fetchCustomerMetrics = async () => {
+      setCustomerLoading(true);
+      try {
+        const res = await fetch(
+          `/api/customer-metrics?start=${startDate}&end=${endDate}`
+        );
+        if (!res.ok) {
+          throw new Error("Failed to load customer metrics.");
+        }
+        const data = await res.json();
+        if (active) {
+          setCustomerMetrics(data);
+        }
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Unknown error");
+        }
+      } finally {
+        if (active) {
+          setCustomerLoading(false);
+        }
+      }
+    };
+    fetchCustomerMetrics();
+    return () => {
+      active = false;
+    };
+  }, [startDate, endDate]);
+
+  // Repeat-customer detail list + summary for the slide-open panel — only
+  // fetches once the panel is opened, and re-fetches whenever the
+  // Start/End Date pickers change while it's open.
+  useEffect(() => {
+    if (!showLtvDetail) return;
+    let active = true;
+    const fetchRepeatCustomers = async () => {
+      setRepeatCustomersLoading(true);
+      try {
+        const res = await fetch(
+          `/api/customer-metrics/repeat-customers?start=${startDate}&end=${endDate}`
+        );
+        if (!res.ok) throw new Error("Failed to load repeat customer list.");
+        const data = await res.json();
+        if (active) {
+          setRepeatCustomersList(data.rows || []);
+          setRepeatCustomersSummary(data.summary || null);
+        }
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        if (active) setRepeatCustomersLoading(false);
+      }
+    };
+    fetchRepeatCustomers();
+    return () => {
+      active = false;
+    };
+  }, [showLtvDetail, startDate, endDate]);
+
   const totals = useMemo(() => {
     return rows.reduce(
       (acc, row) => {
@@ -264,6 +373,11 @@ export default function Dashboard() {
 
   const downloadCsv = (type: "stats" | "products") => {
     const url = `/api/export?type=${type}&start=${startDate}&end=${endDate}`;
+    window.location.href = url;
+  };
+
+  const downloadRepeatCustomersCsv = () => {
+    const url = `/api/customer-metrics/repeat-customers?start=${startDate}&end=${endDate}&format=csv`;
     window.location.href = url;
   };
 
@@ -394,6 +508,43 @@ export default function Dashboard() {
               onClick={() => setShowRtoInputs((prev) => !prev)}
               hint={showRtoInputs ? "Click to hide" : "Click to view assumptions"}
             />
+            <StatCard
+              label="Customer LTV (₹)"
+              value={Math.round(customerMetrics?.avgLtv ?? 0)}
+              tone="purple"
+              onClick={() => setShowLtvDetail((prev) => !prev)}
+              hint={
+                customerLoading
+                  ? "Calculating..."
+                  : showLtvDetail
+                  ? "Click to hide detail"
+                  : "Fulfilled orders, selected range · click for detail"
+              }
+            />
+            <StatCard
+              label="Repeat Customers"
+              value={customerMetrics?.repeatCustomers ?? 0}
+              tone="indigo"
+              percent={customerMetrics?.repeatRatePercent}
+              onClick={() => setShowLtvDetail((prev) => !prev)}
+              hint={
+                customerLoading
+                  ? "Calculating..."
+                  : showLtvDetail
+                  ? "Click to hide detail"
+                  : "Repeat rate, fulfilled only · click for detail"
+              }
+            />
+            <StatCard
+              label="LTV Rate"
+              value={Math.round((customerMetrics?.ltvRate ?? 0) * 100) / 100}
+              tone="emerald"
+              hint={
+                customerLoading
+                  ? "Calculating..."
+                  : "Fulfilled orders ÷ repeat customers"
+              }
+            />
           </div>
 
           {showRtoInputs && (
@@ -497,6 +648,136 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {showLtvDetail && (
+            <div className="flex flex-col gap-6 rounded-3xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_var(--shadow)]">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-col gap-1">
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--muted)]">
+                    Repeat Customer Detail
+                  </p>
+                  <h2 className="text-2xl font-semibold text-[var(--ink)]">
+                    {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}
+                  </h2>
+                  <p className="text-xs text-[var(--muted)]">
+                    Follows the Start/End Date pickers above — adjust them to change this list. Fulfilled orders only, 2+ orders per customer.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadRepeatCustomersCsv}
+                  className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white"
+                >
+                  Export Full List CSV
+                </button>
+              </div>
+
+              {repeatCustomersSummary && repeatCustomersSummary.repeatCustomerCount > 0 && (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-2xl border border-black/10 bg-white px-4 py-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                        Repeat Revenue
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-[var(--ink)]">
+                        {formatCurrency(repeatCustomersSummary.repeatRevenue)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-black/10 bg-white px-4 py-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                        Share of Total Revenue
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-[var(--ink)]">
+                        {pct(repeatCustomersSummary.repeatRevenue, customerMetrics?.totalRevenue ?? 0).toFixed(1)}%
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-black/10 bg-white px-4 py-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                        Avg Orders / Customer
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-[var(--ink)]">
+                        {repeatCustomersSummary.avgOrdersPerRepeatCustomer.toFixed(1)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-black/10 bg-white px-4 py-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                        Avg Days Between Orders
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-[var(--ink)]">
+                        {Math.round(repeatCustomersSummary.avgDaysAsCustomer)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-[var(--muted)]">
+                    <span className="font-semibold text-[var(--ink)]">
+                      {new Intl.NumberFormat("en-IN").format(repeatCustomersSummary.repeatCustomerCount)}
+                    </span>{" "}
+                    repeat customers generated{" "}
+                    <span className="font-semibold text-[var(--ink)]">
+                      {formatCurrency(repeatCustomersSummary.repeatRevenue)}
+                    </span>{" "}
+                    in this range —{" "}
+                    {pct(repeatCustomersSummary.repeatRevenue, customerMetrics?.totalRevenue ?? 0).toFixed(1)}% of total
+                    revenue — averaging {repeatCustomersSummary.avgOrdersPerRepeatCustomer.toFixed(1)} orders and{" "}
+                    {Math.round(repeatCustomersSummary.avgDaysAsCustomer)} days between their first and most recent
+                    purchase.
+                  </p>
+                </>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead className="bg-[var(--surface-strong)] text-left text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    <tr>
+                      <th className="px-6 py-3">Customer</th>
+                      <th className="px-6 py-3">Phone</th>
+                      <th className="px-6 py-3">Orders</th>
+                      <th className="px-6 py-3">Total Spent</th>
+                      <th className="px-6 py-3">Avg Order Value</th>
+                      <th className="px-6 py-3">First Order</th>
+                      <th className="px-6 py-3">Last Order</th>
+                      <th className="px-6 py-3">Days as Customer</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {repeatCustomersList.map((row) => (
+                      <tr key={row.customer_key} className="border-b border-black/5 last:border-0">
+                        <td className="px-6 py-4 font-semibold">{row.customer_key}</td>
+                        <td className="px-6 py-4">{row.phone || "—"}</td>
+                        <td className="px-6 py-4">{row.order_count}</td>
+                        <td className="px-6 py-4 font-semibold text-[var(--accent-dark)]">
+                          {formatCurrency(Number(row.total_spent))}
+                        </td>
+                        <td className="px-6 py-4">{formatCurrency(Number(row.avg_order_value))}</td>
+                        <td className="px-6 py-4">{formatDisplayDate(row.first_order_date)}</td>
+                        <td className="px-6 py-4">{formatDisplayDate(row.last_order_date)}</td>
+                        <td className="px-6 py-4">{row.days_as_customer}</td>
+                      </tr>
+                    ))}
+                    {repeatCustomersList.length === 0 && !repeatCustomersLoading && (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-8 text-center text-[var(--muted)]">
+                          No repeat customers in this date range.
+                        </td>
+                      </tr>
+                    )}
+                    {repeatCustomersLoading && (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-8 text-center text-[var(--muted)]">
+                          Loading...
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-[var(--muted)]">
+                On-page preview shows up to 50 customers, sorted by total spend. The CSV export includes the full list.
+              </p>
             </div>
           )}
 
@@ -900,6 +1181,7 @@ type StatCardProps = {
     | "slate"
     | "emerald"
     | "purple"
+    | "indigo"
     | "ink";
   percent?: number; // 0-100, optional
   onClick?: () => void;
@@ -916,6 +1198,7 @@ function StatCard({ label, value, tone, percent, onClick, hint }: StatCardProps)
     slate: "from-[#e2e8f0] to-[#cbd5f5] text-[#1e293b]",
     emerald: "from-[#dcfce7] to-[#bbf7d0] text-[#166534]",
     purple: "from-[#ede9fe] to-[#ddd6fe] text-[#5b21b6]",
+    indigo: "from-[#e0e7ff] to-[#c7d2fe] text-[#3730a3]",
     ink: "from-[#f5f5f5] to-[#e5e5e5] text-[#111827]",
   };
 
@@ -950,4 +1233,3 @@ function StatCard({ label, value, tone, percent, onClick, hint }: StatCardProps)
     </Wrapper>
   );
 }
-

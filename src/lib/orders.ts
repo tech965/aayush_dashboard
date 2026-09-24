@@ -3,6 +3,9 @@ import { Pool } from "pg";
 export type ShopifyOrder = {
   id: number;
   name?: string;
+  email?: string | null;
+  phone?: string | null;
+  customer?: { phone?: string | null } | null;
   created_at?: string;
   updated_at?: string;
   financial_status?: string | null;
@@ -27,6 +30,8 @@ export type ShopifyLineItem = {
 export type NormalizedOrder = {
   id: number;
   name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
   created_at: string | null;
   updated_at: string | null;
   financial_status: string | null;
@@ -52,6 +57,8 @@ export function normalizeOrder(order: ShopifyOrder): NormalizedOrder {
   return {
     id: order.id,
     name: order.name ?? null,
+    customer_email: order.email ? order.email.toLowerCase() : null,
+    customer_phone: order.phone ?? order.customer?.phone ?? null,
     created_at: order.created_at ?? null,
     updated_at: order.updated_at ?? null,
     financial_status: order.financial_status ?? null,
@@ -88,6 +95,8 @@ export async function upsertOrders(pool: Pool, orders: ShopifyOrder[]) {
   const columns = [
     "id",
     "name",
+    "customer_email",
+    "customer_phone",
     "created_at",
     "updated_at",
     "financial_status",
@@ -103,6 +112,8 @@ export async function upsertOrders(pool: Pool, orders: ShopifyOrder[]) {
     const values: Array<string | number | null> = [
       normalized.id,
       normalized.name,
+      normalized.customer_email,
+      normalized.customer_phone,
       normalized.created_at,
       normalized.updated_at,
       normalized.financial_status,
@@ -119,6 +130,8 @@ export async function upsertOrders(pool: Pool, orders: ShopifyOrder[]) {
       ON CONFLICT (id)
       DO UPDATE SET
         name = EXCLUDED.name,
+        customer_email = COALESCE(EXCLUDED.customer_email, orders.customer_email),
+        customer_phone = COALESCE(EXCLUDED.customer_phone, orders.customer_phone),
         created_at = EXCLUDED.created_at,
         updated_at = EXCLUDED.updated_at,
         financial_status = EXCLUDED.financial_status,
@@ -127,9 +140,15 @@ export async function upsertOrders(pool: Pool, orders: ShopifyOrder[]) {
         tags = EXCLUDED.tags,
         total_price = EXCLUDED.total_price,
         currency = EXCLUDED.currency
+      WHERE orders.updated_at IS NULL
+        OR EXCLUDED.updated_at IS NULL
+        OR EXCLUDED.updated_at >= orders.updated_at
     `;
 
-    await pool.query(sql, values);
+    // Webhooks can arrive out of order; skip payloads older than what's stored
+    // so a stale orders/updated can't revert a fulfilled order.
+    const result = await pool.query(sql, values);
+    if (result.rowCount === 0) continue;
 
     const hasLineItems = Array.isArray(order.line_items);
     if (hasLineItems) {

@@ -2,15 +2,59 @@ import crypto from "crypto";
 
 export function getShopifyConfig() {
   const shop = process.env.SHOPIFY_SHOP;
-  const token = process.env.SHOPIFY_ACCESS_TOKEN;
   const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-10";
   const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
 
-  if (!shop || !token) {
-    throw new Error("SHOPIFY_SHOP or SHOPIFY_ACCESS_TOKEN is not set.");
+  if (!shop) {
+    throw new Error("SHOPIFY_SHOP is not set.");
   }
 
-  return { shop, token, apiVersion, webhookSecret };
+  return { shop, apiVersion, webhookSecret };
+}
+
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+// Prefer a client-credentials token (SHOPIFY_CLIENT_ID/SECRET): the static
+// SHOPIFY_ACCESS_TOKEN lost read_orders approval, which silently broke
+// fulfillment syncing. Falls back to the static token if no client creds.
+export async function getShopifyToken() {
+  const { shop } = getShopifyConfig();
+  const clientId = process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+
+  if (clientId && clientSecret) {
+    if (cachedToken && cachedToken.expiresAt > Date.now()) {
+      return cachedToken.value;
+    }
+    const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "client_credentials",
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Shopify token exchange failed ${response.status}: ${body}`);
+    }
+    const data = await response.json();
+    const ttlMs = (Number(data.expires_in) || 3600) * 1000;
+    cachedToken = {
+      value: data.access_token,
+      expiresAt: Date.now() + ttlMs - 5 * 60 * 1000,
+    };
+    return cachedToken.value;
+  }
+
+  const token = process.env.SHOPIFY_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error(
+      "Set SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (or SHOPIFY_ACCESS_TOKEN)."
+    );
+  }
+  return token;
 }
 
 export function verifyShopifyWebhook(rawBody: string, hmacHeader: string | null) {
@@ -34,7 +78,8 @@ export function verifyShopifyWebhook(rawBody: string, hmacHeader: string | null)
 }
 
 export async function fetchOrderById(orderId: number) {
-  const { shop, token, apiVersion } = getShopifyConfig();
+  const { shop, apiVersion } = getShopifyConfig();
+  const token = await getShopifyToken();
   const url = `https://${shop}/admin/api/${apiVersion}/orders/${orderId}.json`;
 
   const response = await fetch(url, {
@@ -54,7 +99,7 @@ export async function fetchOrderById(orderId: number) {
 }
 
 export async function fetchOrdersPage(url: string) {
-  const { token } = getShopifyConfig();
+  const token = await getShopifyToken();
   const response = await fetch(url, {
     headers: {
       "X-Shopify-Access-Token": token,

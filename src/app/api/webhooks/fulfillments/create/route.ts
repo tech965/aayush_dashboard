@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { upsertOrders } from "@/lib/orders";
 import { fetchOrderById } from "@/lib/shopify";
-import { parseAndVerifyWebhook } from "@/lib/webhooks";
+import { parseAndVerifyWebhook, webhookErrorResponse } from "@/lib/webhooks";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ ok: false, error: message }, { status: 401 });
+    return webhookErrorResponse(error);
   }
 }
